@@ -74,17 +74,37 @@ class Companies(Stream):
 
 
 class Basic(Stream):
+    def get_response(self, ctx, path, params=None):
+        req = {"path": path}
+        if params is not None:
+            req['params'] = params
+        resp = ctx.client.GET(req, self.tap_stream_id)
+        return resp
+
+    def get_records_for_company(self, ctx, company):
+        path = self.path.format(companyId=company["id"])
+        resp = self.get_response(ctx, path=path)
+        records = self.transform_dts(ctx, self.format_response(resp, company))
+        return records
+
     def sync(self, ctx):
         for company in ctx.cache["companies"]:
-            path = self.path.format(companyId=company["id"])
-            resp = ctx.client.GET({"path": path}, self.tap_stream_id)
-            records = self.transform_dts(ctx, self.format_response(resp, company))
+            records = self.get_records_for_company(ctx, company)
             self.write_records(records)
+
+
+class BankAccounts(Basic):
+    def sync(self, ctx):
+        for company in ctx.cache["companies"]:
+            records = self.get_records_for_company(ctx, company)
+            ctx.cache[company["id"]]['bank_accounts'] = records
+            self.write_records(records)
+
 
 PAGE_SIZE = 500
 
 
-class Paginated(Stream):
+class Paginated(Basic):
     def sync(self, ctx):
         for company in ctx.cache["companies"]:
             path = self.path.format(companyId=company["id"])
@@ -97,6 +117,9 @@ class Paginated(Stream):
                 if len(records) < PAGE_SIZE:
                     break
                 page += 1
+
+
+class BankStatements(Paginated):
 
 
 class Financials(Stream):
@@ -155,10 +178,13 @@ all_streams = [
     Basic("accounts", ["id","companyId"],
           "/companies/{companyId}/data/accounts",
           collection_key="accounts"),
-    Basic("bank_statements", ["accountName","companyId"],
-          "/companies/{companyId}/data/bankStatements"),
-    Basic("bills", ["id","companyId"], "/companies/{companyId}/data/bills",
-          collection_key="bills"),
+    BankAccounts("bank_accounts", ["id", "companyId"],
+          "/companies/{companyId}/data/bankAccounts"),
+    BankStatements("bank_statements", ["id","companyId"],
+          "/companies/{companyId}/data/bankStatements",
+          collection_key="results"),
+    Paginated("bills", ["id","companyId"], "/companies/{companyId}/data/bills",
+          collection_key="results"),
     Basic("company_info", ["companyId"], "/companies/{companyId}/data/info",
           returns_collection=False),
     Basic("credit_notes", ["id","companyId"], "/companies/{companyId}/data/creditNotes",
